@@ -620,6 +620,46 @@ func TestFindProgramAddress(t *testing.T) {
 	}
 }
 
+func TestFindAssociatedTokenAddressWithProgramID(t *testing.T) {
+	wallet := MustPublicKeyFromBase58("F8UvVsKnzWyp2nF8aDcqvQ2GVcRpqT91WDsAtvBKCMt9")
+	mint := SolMint
+
+	legacyATA, legacyBump, err := FindAssociatedTokenAddress(wallet, mint)
+	require.NoError(t, err)
+
+	legacyATAWithProgram, legacyBumpWithProgram, err := FindAssociatedTokenAddressWithProgramID(wallet, mint, TokenProgramID)
+	require.NoError(t, err)
+	assert.Equal(t, legacyATA, legacyATAWithProgram)
+	assert.Equal(t, legacyBump, legacyBumpWithProgram)
+
+	ata2022, bump2022, err := FindAssociatedTokenAddress2022(wallet, mint)
+	require.NoError(t, err)
+	ata2022WithProgram, bump2022WithProgram, err := FindAssociatedTokenAddressWithProgramID(wallet, mint, Token2022ProgramID)
+	require.NoError(t, err)
+	assert.Equal(t, ata2022, ata2022WithProgram)
+	assert.Equal(t, bump2022, bump2022WithProgram)
+
+	assert.NotEqual(t, legacyATA, ata2022)
+
+	expectedLegacyATA, expectedLegacyBump, err := FindProgramAddress([][]byte{
+		wallet[:],
+		TokenProgramID[:],
+		mint[:],
+	}, SPLAssociatedTokenAccountProgramID)
+	require.NoError(t, err)
+	assert.Equal(t, expectedLegacyATA, legacyATA)
+	assert.Equal(t, expectedLegacyBump, legacyBump)
+
+	expected2022ATA, expected2022Bump, err := FindProgramAddress([][]byte{
+		wallet[:],
+		Token2022ProgramID[:],
+		mint[:],
+	}, SPLAssociatedTokenAccountProgramID)
+	require.NoError(t, err)
+	assert.Equal(t, expected2022ATA, ata2022)
+	assert.Equal(t, expected2022Bump, bump2022)
+}
+
 func TestFindTokenMetadataAddress(t *testing.T) {
 	// Zuuper Grapes (TOILET)
 	// https://solscan.io/token/77K8mr457qxUSSNSfi4sSj5euP8DyuJJWHAUQVW8QCp3
