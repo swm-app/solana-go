@@ -15,8 +15,6 @@
 package ws
 
 import (
-	"context"
-
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 )
@@ -33,7 +31,7 @@ type AccountResult struct {
 func (cl *Client) AccountSubscribe(
 	account solana.PublicKey,
 	commitment rpc.CommitmentType,
-) (*AccountSubscription, error) {
+) (*Subscription[AccountResult], error) {
 	return cl.AccountSubscribeWithOpts(
 		account,
 		commitment,
@@ -41,13 +39,13 @@ func (cl *Client) AccountSubscribe(
 	)
 }
 
-// AccountSubscribe subscribes to an account to receive notifications
+// AccountSubscribeWithOpts subscribes to an account to receive notifications
 // when the lamports or data for a given account public key changes.
 func (cl *Client) AccountSubscribeWithOpts(
 	account solana.PublicKey,
 	commitment rpc.CommitmentType,
 	encoding solana.EncodingType,
-) (*AccountSubscription, error) {
+) (*Subscription[AccountResult], error) {
 
 	params := []interface{}{account.String()}
 	conf := map[string]interface{}{
@@ -74,46 +72,8 @@ func (cl *Client) AccountSubscribeWithOpts(
 	if err != nil {
 		return nil, err
 	}
-	return &AccountSubscription{
-		sub: genSub,
+	return &Subscription[AccountResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type AccountSubscription struct {
-	sub *Subscription
-}
-
-func (sw *AccountSubscription) Recv(ctx context.Context) (*AccountResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*AccountResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *AccountSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *AccountSubscription) Response() <-chan *AccountResult {
-	typedChan := make(chan *AccountResult, 1)
-	go func(ch chan *AccountResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*AccountResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *AccountSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

@@ -15,8 +15,6 @@
 package ws
 
 import (
-	"context"
-
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 )
@@ -52,20 +50,20 @@ func (cl *Client) LogsSubscribe(
 	// Filter criteria for the logs to receive results by account type.
 	filter LogsSubscribeFilterType,
 	commitment rpc.CommitmentType, // (optional)
-) (*LogSubscription, error) {
+) (*Subscription[LogResult], error) {
 	return cl.logsSubscribe(
 		filter,
 		commitment,
 	)
 }
 
-// LogsSubscribe subscribes to all transactions that mention the provided Pubkey.
+// LogsSubscribeMentions subscribes to all transactions that mention the provided Pubkey.
 func (cl *Client) LogsSubscribeMentions(
 	// Subscribe to all transactions that mention the provided Pubkey.
 	mentions solana.PublicKey,
 	// (optional)
 	commitment rpc.CommitmentType,
-) (*LogSubscription, error) {
+) (*Subscription[LogResult], error) {
 	return cl.logsSubscribe(
 		rpc.M{
 			"mentions": []string{mentions.String()},
@@ -74,16 +72,18 @@ func (cl *Client) LogsSubscribeMentions(
 	)
 }
 
-// LogsSubscribe subscribes to transaction logging.
+// logsSubscribe subscribes to transaction logging.
 func (cl *Client) logsSubscribe(
 	filter interface{},
 	commitment rpc.CommitmentType,
-) (*LogSubscription, error) {
+) (*Subscription[LogResult], error) {
 
 	params := []interface{}{filter}
-	conf := map[string]interface{}{}
+	var conf map[string]interface{}
 	if commitment != "" {
-		conf["commitment"] = commitment
+		conf = map[string]interface{}{
+			"commitment": commitment,
+		}
 	}
 
 	genSub, err := cl.subscribe(
@@ -100,46 +100,8 @@ func (cl *Client) logsSubscribe(
 	if err != nil {
 		return nil, err
 	}
-	return &LogSubscription{
-		sub: genSub,
+	return &Subscription[LogResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type LogSubscription struct {
-	sub *Subscription
-}
-
-func (sw *LogSubscription) Recv(ctx context.Context) (*LogResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*LogResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *LogSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *LogSubscription) Response() <-chan *LogResult {
-	typedChan := make(chan *LogResult, 1)
-	go func(ch chan *LogResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*LogResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *LogSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

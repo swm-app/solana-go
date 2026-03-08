@@ -16,6 +16,7 @@ package sendandconfirmtransaction
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -120,25 +121,20 @@ func WaitForConfirmation(
 		timeout = &t
 	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-time.After(*timeout):
+	timeoutCtx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+
+	resp, err := sub.Recv(timeoutCtx)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
 			return false, ErrTimeout
-		case resp, ok := <-sub.Response():
-			if !ok {
-				return false, fmt.Errorf("subscription closed")
-			}
-			if resp.Value.Err != nil {
-				// The transaction was confirmed, but it failed while executing (one of the instructions failed).
-				return true, fmt.Errorf("confirmed transaction with execution error: %v", resp.Value.Err)
-			} else {
-				// Success! Confirmed! And there was no error while executing the transaction.
-				return true, nil
-			}
-		case err := <-sub.Err():
-			return false, err
 		}
+		return false, err
 	}
+	if resp.Value.Err != nil {
+		// The transaction was confirmed, but it failed while executing (one of the instructions failed).
+		return true, fmt.Errorf("confirmed transaction with execution error: %v", resp.Value.Err)
+	}
+	// Success! Confirmed! And there was no error while executing the transaction.
+	return true, nil
 }

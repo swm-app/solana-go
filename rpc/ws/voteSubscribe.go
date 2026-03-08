@@ -15,8 +15,6 @@
 package ws
 
 import (
-	"context"
-
 	"github.com/gagliardetto/solana-go"
 )
 
@@ -37,7 +35,7 @@ type VoteResult struct {
 // This subscription is unstable and only available if the validator
 // was started with the --rpc-pubsub-enable-vote-subscription flag.
 // The format of this subscription may change in the future.
-func (cl *Client) VoteSubscribe() (*VoteSubscription, error) {
+func (cl *Client) VoteSubscribe() (*Subscription[VoteResult], error) {
 	genSub, err := cl.subscribe(
 		nil,
 		nil,
@@ -52,46 +50,8 @@ func (cl *Client) VoteSubscribe() (*VoteSubscription, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &VoteSubscription{
-		sub: genSub,
+	return &Subscription[VoteResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type VoteSubscription struct {
-	sub *Subscription
-}
-
-func (sw *VoteSubscription) Recv(ctx context.Context) (*VoteResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*VoteResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *VoteSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *VoteSubscription) Response() <-chan *VoteResult {
-	typedChan := make(chan *VoteResult, 1)
-	go func(ch chan *VoteResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*VoteResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *VoteSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

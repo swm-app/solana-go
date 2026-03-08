@@ -17,56 +17,79 @@
 
 package ws
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
-type Subscription struct {
+type result interface{}
+
+type decoderFunc func([]byte) (interface{}, error)
+
+type subscription struct {
 	req               *request
 	subID             uint64
 	stream            chan result
-	err               chan error
+	done              chan struct{}
+	once              sync.Once
+	err               error
 	closeFunc         func(err error)
-	closed            bool
 	unsubscribeMethod string
 	decoderFunc       decoderFunc
 }
-
-type decoderFunc func([]byte) (interface{}, error)
 
 func newSubscription(
 	req *request,
 	closeFunc func(err error),
 	unsubscribeMethod string,
 	decoderFunc decoderFunc,
-) *Subscription {
-	return &Subscription{
+) *subscription {
+	return &subscription{
 		req:               req,
-		subID:             0,
-		stream:            make(chan result, 200_000),
-		err:               make(chan error, 100_000),
+		stream:            make(chan result, 256),
+		done:              make(chan struct{}),
 		closeFunc:         closeFunc,
 		unsubscribeMethod: unsubscribeMethod,
 		decoderFunc:       decoderFunc,
 	}
 }
 
-func (s *Subscription) Recv(ctx context.Context) (interface{}, error) {
+func (s *subscription) close(err error) {
+	s.once.Do(func() {
+		s.err = err
+		close(s.done)
+	})
+}
+
+func (s *subscription) isDone() bool {
 	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d := <-s.stream:
-		return d, nil
-	case err := <-s.err:
-		return nil, err
+	case <-s.done:
+		return true
+	default:
+		return false
 	}
 }
 
-func (s *Subscription) Unsubscribe() {
-	s.unsubscribe(nil)
+// Subscription is a type-safe generic subscription.
+type Subscription[T any] struct {
+	sub       *subscription
+	closeFunc func()
 }
 
-func (s *Subscription) unsubscribe(err error) {
-	s.closeFunc(err)
-	s.closed = true
-	close(s.stream)
-	close(s.err)
+func (s *Subscription[T]) Recv(ctx context.Context) (*T, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.sub.done:
+		if s.sub.err != nil {
+			return nil, s.sub.err
+		}
+		return nil, ErrSubscriptionClosed
+	case d := <-s.sub.stream:
+		return d.(*T), nil
+	}
+}
+
+func (s *Subscription[T]) Unsubscribe() {
+	s.closeFunc()
 }

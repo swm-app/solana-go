@@ -14,13 +14,11 @@
 
 package ws
 
-import "context"
-
 type RootResult uint64
 
-// SignatureSubscribe subscribes to receive notification
+// RootSubscribe subscribes to receive notification
 // anytime a new root is set by the validator.
-func (cl *Client) RootSubscribe() (*RootSubscription, error) {
+func (cl *Client) RootSubscribe() (*Subscription[RootResult], error) {
 	genSub, err := cl.subscribe(
 		nil,
 		nil,
@@ -35,46 +33,8 @@ func (cl *Client) RootSubscribe() (*RootSubscription, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &RootSubscription{
-		sub: genSub,
+	return &Subscription[RootResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type RootSubscription struct {
-	sub *Subscription
-}
-
-func (sw *RootSubscription) Recv(ctx context.Context) (*RootResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*RootResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *RootSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *RootSubscription) Response() <-chan *RootResult {
-	typedChan := make(chan *RootResult, 1)
-	go func(ch chan *RootResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*RootResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *RootSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

@@ -15,8 +15,6 @@
 package ws
 
 import (
-	"context"
-
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 )
@@ -33,7 +31,7 @@ type ProgramResult struct {
 func (cl *Client) ProgramSubscribe(
 	programID solana.PublicKey,
 	commitment rpc.CommitmentType,
-) (*ProgramSubscription, error) {
+) (*Subscription[ProgramResult], error) {
 	return cl.ProgramSubscribeWithOpts(
 		programID,
 		commitment,
@@ -42,14 +40,14 @@ func (cl *Client) ProgramSubscribe(
 	)
 }
 
-// ProgramSubscribe subscribes to a program to receive notifications
+// ProgramSubscribeWithOpts subscribes to a program to receive notifications
 // when the lamports or data for a given account owned by the program changes.
 func (cl *Client) ProgramSubscribeWithOpts(
 	programID solana.PublicKey,
 	commitment rpc.CommitmentType,
 	encoding solana.EncodingType,
 	filters []rpc.RPCFilter,
-) (*ProgramSubscription, error) {
+) (*Subscription[ProgramResult], error) {
 
 	params := []interface{}{programID.String()}
 	conf := map[string]interface{}{
@@ -79,46 +77,8 @@ func (cl *Client) ProgramSubscribeWithOpts(
 	if err != nil {
 		return nil, err
 	}
-	return &ProgramSubscription{
-		sub: genSub,
+	return &Subscription[ProgramResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type ProgramSubscription struct {
-	sub *Subscription
-}
-
-func (sw *ProgramSubscription) Recv(ctx context.Context) (*ProgramResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*ProgramResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *ProgramSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *ProgramSubscription) Response() <-chan *ProgramResult {
-	typedChan := make(chan *ProgramResult, 1)
-	go func(ch chan *ProgramResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*ProgramResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *ProgramSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

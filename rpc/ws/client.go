@@ -28,14 +28,11 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
-	"github.com/gorilla/rpc/v2/json2"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 )
 
 var ErrSubscriptionClosed = errors.New("subscription closed")
-
-type result interface{}
 
 type Client struct {
 	rpcURL                  string
@@ -43,9 +40,8 @@ type Client struct {
 	connCtx                 context.Context
 	connCtxCancel           context.CancelFunc
 	lock                    sync.RWMutex
-	subscriptionByRequestID map[uint64]*Subscription
-	subscriptionByWSSubID   map[uint64]*Subscription
-	reconnectOnErr          bool
+	subscriptionByRequestID map[uint64]*subscription
+	subscriptionByWSSubID   map[uint64]*subscription
 	shortID                 bool
 }
 
@@ -70,8 +66,8 @@ func Connect(ctx context.Context, rpcEndpoint string) (c *Client, err error) {
 func ConnectWithOptions(ctx context.Context, rpcEndpoint string, opt *Options) (c *Client, err error) {
 	c = &Client{
 		rpcURL:                  rpcEndpoint,
-		subscriptionByRequestID: map[uint64]*Subscription{},
-		subscriptionByWSSubID:   map[uint64]*Subscription{},
+		subscriptionByRequestID: map[uint64]*subscription{},
+		subscriptionByWSSubID:   map[uint64]*subscription{},
 	}
 
 	dialer := &websocket.Dialer{
@@ -97,11 +93,15 @@ func ConnectWithOptions(ctx context.Context, rpcEndpoint string, opt *Options) (
 	if err != nil {
 		if resp != nil {
 			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			err = fmt.Errorf("new ws client: dial: %w, status: %s, body: %q", err, resp.Status, string(body))
 		} else {
 			err = fmt.Errorf("new ws client: dial: %w", err)
 		}
 		return nil, err
+	}
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
 	}
 
 	c.connCtx, c.connCtxCancel = context.WithCancel(context.Background())
@@ -109,6 +109,7 @@ func ConnectWithOptions(ctx context.Context, rpcEndpoint string, opt *Options) (
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
 		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-c.connCtx.Done():
@@ -182,6 +183,12 @@ func (c *Client) handleMessage(message []byte) {
 
 	requestID, ok := getUint64WithOk(message, "id")
 	if ok {
+		// Check for server error response
+		_, errDataType, _, _ := jsonparser.Get(message, "error")
+		if errDataType != jsonparser.NotExist {
+			c.handleSubscriptionError(requestID, message)
+			return
+		}
 		subID, _ := getUint64WithOk(message, "result")
 		c.handleNewSubscriptionMessage(requestID, subID)
 		return
@@ -189,6 +196,27 @@ func (c *Client) handleMessage(message []byte) {
 
 	subID, _ := getUint64WithOk(message, "params", "subscription")
 	c.handleSubscriptionMessage(subID, message)
+}
+
+func (c *Client) handleSubscriptionError(requestID uint64, message []byte) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	sub, found := c.subscriptionByRequestID[requestID]
+	if !found {
+		zlog.Error("cannot find websocket message handler for error response",
+			zap.Uint64("request_id", requestID),
+		)
+		return
+	}
+
+	errMsg, _ := jsonparser.GetString(message, "error", "message")
+	if errMsg == "" {
+		errMsg = "unknown server error"
+	}
+	sub.close(fmt.Errorf("server error: %s", errMsg))
+
+	delete(c.subscriptionByRequestID, requestID)
 }
 
 func (c *Client) handleNewSubscriptionMessage(requestID, subID uint64) {
@@ -218,7 +246,6 @@ func (c *Client) handleNewSubscriptionMessage(requestID, subID uint64) {
 		zap.Uint64("request_id", requestID),
 		zap.Int("subscription_count", len(c.subscriptionByWSSubID)),
 	)
-	return
 }
 
 func (c *Client) handleSubscriptionMessage(subID uint64, message []byte) {
@@ -236,28 +263,26 @@ func (c *Client) handleSubscriptionMessage(subID uint64, message []byte) {
 		return
 	}
 
+	if sub.isDone() {
+		return
+	}
+
 	// Decode the message using the subscription-provided decoderFunc.
 	result, err := sub.decoderFunc(message)
 	if err != nil {
-		fmt.Println("*****************************")
 		c.closeSubscription(sub.req.ID, fmt.Errorf("unable to decode client response: %w", err))
 		return
 	}
 
-	// this cannot be blocking or else
-	// we  will no read any other message
-	if len(sub.stream) >= cap(sub.stream) {
-		zlog.Warn("closing ws client subscription... not consuming fast en ought",
+	// Non-blocking send to prevent deadlock on slow consumers.
+	select {
+	case sub.stream <- result:
+	default:
+		zlog.Warn("closing ws client subscription... not consuming fast enough",
 			zap.Uint64("request_id", sub.req.ID),
 		)
-		c.closeSubscription(sub.req.ID, fmt.Errorf("reached channel max capacity %d", len(sub.stream)))
-		return
+		c.closeSubscription(sub.req.ID, fmt.Errorf("reached channel max capacity %d", cap(sub.stream)))
 	}
-
-	if !sub.closed {
-		sub.stream <- result
-	}
-	return
 }
 
 func (c *Client) closeAllSubscription(err error) {
@@ -265,11 +290,11 @@ func (c *Client) closeAllSubscription(err error) {
 	defer c.lock.Unlock()
 
 	for _, sub := range c.subscriptionByRequestID {
-		sub.err <- err
+		sub.close(err)
 	}
 
-	c.subscriptionByRequestID = map[uint64]*Subscription{}
-	c.subscriptionByWSSubID = map[uint64]*Subscription{}
+	c.subscriptionByRequestID = map[uint64]*subscription{}
+	c.subscriptionByWSSubID = map[uint64]*subscription{}
 }
 
 func (c *Client) closeSubscription(reqID uint64, err error) {
@@ -281,12 +306,12 @@ func (c *Client) closeSubscription(reqID uint64, err error) {
 		return
 	}
 
-	sub.err <- err
+	sub.close(err)
 
-	err = c.unsubscribe(sub.subID, sub.unsubscribeMethod)
-	if err != nil {
+	unsubErr := c.unsubscribe(sub.subID, sub.unsubscribeMethod)
+	if unsubErr != nil {
 		zlog.Warn("unable to send rpc unsubscribe call",
-			zap.Error(err),
+			zap.Error(unsubErr),
 		)
 	}
 
@@ -315,7 +340,7 @@ func (c *Client) subscribe(
 	subscriptionMethod string,
 	unsubscribeMethod string,
 	decoderFunc decoderFunc,
-) (*Subscription, error) {
+) (*subscription, error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -348,30 +373,6 @@ func (c *Client) subscribe(
 	return sub, nil
 }
 
-func decodeResponseFromReader(r io.Reader, reply interface{}) (err error) {
-	var c *response
-	if err := json.NewDecoder(r).Decode(&c); err != nil {
-		return err
-	}
-
-	if c.Error != nil {
-		jsonErr := &json2.Error{}
-		if err := json.Unmarshal(*c.Error, jsonErr); err != nil {
-			return &json2.Error{
-				Code:    json2.E_SERVER,
-				Message: string(*c.Error),
-			}
-		}
-		return jsonErr
-	}
-
-	if c.Params == nil {
-		return json2.ErrNullResult
-	}
-
-	return json.Unmarshal(*c.Params.Result, &reply)
-}
-
 func decodeResponseFromMessage(r []byte, reply interface{}) (err error) {
 	var c *response
 	if err := json.Unmarshal(r, &c); err != nil {
@@ -379,18 +380,11 @@ func decodeResponseFromMessage(r []byte, reply interface{}) (err error) {
 	}
 
 	if c.Error != nil {
-		jsonErr := &json2.Error{}
-		if err := json.Unmarshal(*c.Error, jsonErr); err != nil {
-			return &json2.Error{
-				Code:    json2.E_SERVER,
-				Message: string(*c.Error),
-			}
-		}
-		return jsonErr
+		return fmt.Errorf("RPC error: %s", string(*c.Error))
 	}
 
 	if c.Params == nil {
-		return json2.ErrNullResult
+		return fmt.Errorf("nil params in response")
 	}
 
 	return json.Unmarshal(*c.Params.Result, &reply)

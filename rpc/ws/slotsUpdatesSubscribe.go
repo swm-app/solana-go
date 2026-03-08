@@ -15,8 +15,6 @@
 package ws
 
 import (
-	"context"
-
 	"github.com/gagliardetto/solana-go"
 )
 
@@ -57,7 +55,7 @@ const (
 //
 // This subscription is unstable; the format of this subscription
 // may change in the future and it may not always be supported.
-func (cl *Client) SlotsUpdatesSubscribe() (*SlotsUpdatesSubscription, error) {
+func (cl *Client) SlotsUpdatesSubscribe() (*Subscription[SlotsUpdatesResult], error) {
 	genSub, err := cl.subscribe(
 		nil,
 		nil,
@@ -72,46 +70,8 @@ func (cl *Client) SlotsUpdatesSubscribe() (*SlotsUpdatesSubscription, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SlotsUpdatesSubscription{
-		sub: genSub,
+	return &Subscription[SlotsUpdatesResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type SlotsUpdatesSubscription struct {
-	sub *Subscription
-}
-
-func (sw *SlotsUpdatesSubscription) Recv(ctx context.Context) (*SlotsUpdatesResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*SlotsUpdatesResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *SlotsUpdatesSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *SlotsUpdatesSubscription) Response() <-chan *SlotsUpdatesResult {
-	typedChan := make(chan *SlotsUpdatesResult, 1)
-	go func(ch chan *SlotsUpdatesResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*SlotsUpdatesResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *SlotsUpdatesSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

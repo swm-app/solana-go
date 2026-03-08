@@ -15,8 +15,6 @@
 package ws
 
 import (
-	"context"
-
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 )
@@ -42,7 +40,7 @@ type ParsedBlockResult struct {
 func (cl *Client) ParsedBlockSubscribe(
 	filter BlockSubscribeFilter,
 	opts *BlockSubscribeOpts,
-) (*ParsedBlockSubscription, error) {
+) (*Subscription[ParsedBlockResult], error) {
 	var params []interface{}
 	if filter != nil {
 		switch v := filter.(type) {
@@ -85,43 +83,8 @@ func (cl *Client) ParsedBlockSubscribe(
 	if err != nil {
 		return nil, err
 	}
-	return &ParsedBlockSubscription{
-		sub: genSub,
+	return &Subscription[ParsedBlockResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type ParsedBlockSubscription struct {
-	sub *Subscription
-}
-
-func (sw *ParsedBlockSubscription) Recv(ctx context.Context) (*ParsedBlockResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d := <-sw.sub.stream:
-		return d.(*ParsedBlockResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *ParsedBlockSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *ParsedBlockSubscription) Response() <-chan *ParsedBlockResult {
-	typedChan := make(chan *ParsedBlockResult, 1)
-	go func(ch chan *ParsedBlockResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*ParsedBlockResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *ParsedBlockSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

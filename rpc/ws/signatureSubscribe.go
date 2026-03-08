@@ -15,10 +15,6 @@
 package ws
 
 import (
-	"context"
-	"fmt"
-	"time"
-
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 )
@@ -38,11 +34,13 @@ type SignatureResult struct {
 func (cl *Client) SignatureSubscribe(
 	signature solana.Signature, // Transaction Signature.
 	commitment rpc.CommitmentType, // (optional)
-) (*SignatureSubscription, error) {
+) (*Subscription[SignatureResult], error) {
 	params := []interface{}{signature.String()}
-	conf := map[string]interface{}{}
+	var conf map[string]interface{}
 	if commitment != "" {
-		conf["commitment"] = commitment
+		conf = map[string]interface{}{
+			"commitment": commitment,
+		}
 	}
 
 	genSub, err := cl.subscribe(
@@ -59,59 +57,8 @@ func (cl *Client) SignatureSubscribe(
 	if err != nil {
 		return nil, err
 	}
-	return &SignatureSubscription{
-		sub: genSub,
+	return &Subscription[SignatureResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type SignatureSubscription struct {
-	sub *Subscription
-}
-
-func (sw *SignatureSubscription) Recv(ctx context.Context) (*SignatureResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*SignatureResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *SignatureSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *SignatureSubscription) Response() <-chan *SignatureResult {
-	typedChan := make(chan *SignatureResult, 1)
-	go func(ch chan *SignatureResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*SignatureResult)
-	}(typedChan)
-	return typedChan
-}
-
-var ErrTimeout = fmt.Errorf("timeout waiting for confirmation")
-
-func (sw *SignatureSubscription) RecvWithTimeout(timeout time.Duration) (*SignatureResult, error) {
-	select {
-	case <-time.After(timeout):
-		return nil, ErrTimeout
-	case d := <-sw.sub.stream:
-		return d.(*SignatureResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *SignatureSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

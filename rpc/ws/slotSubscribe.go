@@ -14,8 +14,6 @@
 
 package ws
 
-import "context"
-
 type SlotResult struct {
 	Parent uint64 `json:"parent"`
 	Root   uint64 `json:"root"`
@@ -23,7 +21,7 @@ type SlotResult struct {
 }
 
 // SlotSubscribe subscribes to receive notification anytime a slot is processed by the validator.
-func (cl *Client) SlotSubscribe() (*SlotSubscription, error) {
+func (cl *Client) SlotSubscribe() (*Subscription[SlotResult], error) {
 	genSub, err := cl.subscribe(
 		nil,
 		nil,
@@ -38,46 +36,8 @@ func (cl *Client) SlotSubscribe() (*SlotSubscription, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SlotSubscription{
-		sub: genSub,
+	return &Subscription[SlotResult]{
+		sub:       genSub,
+		closeFunc: func() { genSub.closeFunc(nil) },
 	}, nil
-}
-
-type SlotSubscription struct {
-	sub *Subscription
-}
-
-func (sw *SlotSubscription) Recv(ctx context.Context) (*SlotResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case d, ok := <-sw.sub.stream:
-		if !ok {
-			return nil, ErrSubscriptionClosed
-		}
-		return d.(*SlotResult), nil
-	case err := <-sw.sub.err:
-		return nil, err
-	}
-}
-
-func (sw *SlotSubscription) Err() <-chan error {
-	return sw.sub.err
-}
-
-func (sw *SlotSubscription) Response() <-chan *SlotResult {
-	typedChan := make(chan *SlotResult, 1)
-	go func(ch chan *SlotResult) {
-		// TODO: will this subscription yield more than one result?
-		d, ok := <-sw.sub.stream
-		if !ok {
-			return
-		}
-		ch <- d.(*SlotResult)
-	}(typedChan)
-	return typedChan
-}
-
-func (sw *SlotSubscription) Unsubscribe() {
-	sw.sub.Unsubscribe()
 }

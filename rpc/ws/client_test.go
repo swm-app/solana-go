@@ -81,7 +81,7 @@ func Test_AccountSubscribeWithHttpHeader(t *testing.T) {
 
 	// seconds waiting before disconnecting from socket
 	const timeoutSeconds = 3
-	go func(sub *AccountSubscription) {
+	go func(sub *Subscription[AccountResult]) {
 		ticker := time.NewTicker(1 * time.Second)
 		secs := 0
 		for range ticker.C {

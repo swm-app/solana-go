@@ -1,6 +1,6 @@
 module github.com/gagliardetto/solana-go
 
-go 1.19
+go 1.26
 
 require (
 	github.com/gagliardetto/binary v0.8.0
@@ -56,7 +56,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/fatih/color v1.9.0
 	github.com/google/go-cmp v0.5.2
-	github.com/gorilla/rpc v1.2.0
 	github.com/gorilla/websocket v1.4.2
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.13.6
