@@ -43,6 +43,43 @@ type SimulateTransactionResult struct {
 
 	// The number of compute budget units consumed during the processing of this transaction.
 	UnitsConsumed *uint64 `json:"unitsConsumed,omitempty"`
+
+	// Fee this transaction would be charged (base fee plus any priority fee
+	// implied by ComputeBudget instructions in the simulated transaction).
+	Fee *uint64 `json:"fee,omitempty"`
+
+	// Lamport balances of the transaction's accounts before and after the
+	// simulated transaction, indexed by the transaction's account list.
+	PreBalances  []uint64 `json:"preBalances,omitempty"`
+	PostBalances []uint64 `json:"postBalances,omitempty"`
+
+	// SPL / Token-2022 balances before and after the simulated transaction,
+	// for the token accounts the transaction touched.
+	PreTokenBalances  []TokenBalance `json:"preTokenBalances,omitempty"`
+	PostTokenBalances []TokenBalance `json:"postTokenBalances,omitempty"`
+
+	// Inner (CPI) instructions, populated only when InnerInstructions was requested.
+	InnerInstructions []InnerInstruction `json:"innerInstructions,omitempty"`
+
+	// Return data from the most recent instruction that produced any.
+	ReturnData *ReturnData `json:"returnData,omitempty"`
+
+	// Blockhash the node substituted for simulation when ReplaceRecentBlockhash
+	// was requested.
+	ReplacementBlockhash *ReplacementBlockhash `json:"replacementBlockhash,omitempty"`
+
+	// Addresses resolved from Address Lookup Tables during simulation.
+	LoadedAddresses *LoadedAddresses `json:"loadedAddresses,omitempty"`
+
+	// Total size in bytes of all accounts loaded by the transaction.
+	LoadedAccountsDataSize *uint64 `json:"loadedAccountsDataSize,omitempty"`
+}
+
+// ReplacementBlockhash is returned when SimulateTransactionOpts.ReplaceRecentBlockhash
+// was set: the recent blockhash the node substituted before simulation.
+type ReplacementBlockhash struct {
+	Blockhash            solana.Hash `json:"blockhash"`
+	LastValidBlockHeight uint64      `json:"lastValidBlockHeight"`
 }
 
 // SimulateTransaction simulates sending a transaction.
@@ -71,6 +108,14 @@ type SimulateTransactionOpts struct {
 	ReplaceRecentBlockhash bool
 
 	Accounts *SimulateTransactionAccountsOpts
+
+	// MinContextSlot is the minimum slot the request can be evaluated at.
+	// Zero means unset (no minimum).
+	MinContextSlot uint64
+
+	// If true, inner (CPI) instructions are included in the result.
+	// (default: false)
+	InnerInstructions bool
 }
 
 type SimulateTransactionAccountsOpts struct {
@@ -123,6 +168,12 @@ func (cl *Client) SimulateRawTransactionWithOpts(
 				"encoding":  opts.Accounts.Encoding,
 				"addresses": opts.Accounts.Addresses,
 			}
+		}
+		if opts.MinContextSlot > 0 {
+			obj["minContextSlot"] = opts.MinContextSlot
+		}
+		if opts.InnerInstructions {
+			obj["innerInstructions"] = opts.InnerInstructions
 		}
 	}
 

@@ -2966,7 +2966,67 @@ func TestClient_IsBlockhashValid(t *testing.T) {
 }
 
 func TestClient_SimulateTransaction(t *testing.T) {
-	// TODO
+	responseBody := `{"context":{"slot":100},"value":{` +
+		`"err":null,` +
+		`"logs":["Program log: ok"],` +
+		`"unitsConsumed":1234,` +
+		`"fee":5000,` +
+		`"preBalances":[1000000,0],` +
+		`"postBalances":[994000,1000],` +
+		`"preTokenBalances":[{"accountIndex":1,"mint":"So11111111111111111111111111111111111111112","owner":"11111111111111111111111111111111","uiTokenAmount":{"amount":"0","decimals":6,"uiAmount":null,"uiAmountString":"0"}}],` +
+		`"postTokenBalances":[{"accountIndex":1,"mint":"So11111111111111111111111111111111111111112","owner":"11111111111111111111111111111111","uiTokenAmount":{"amount":"600","decimals":6,"uiAmount":0.0006,"uiAmountString":"0.0006"}}],` +
+		`"replacementBlockhash":{"blockhash":"GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi","lastValidBlockHeight":200},` +
+		`"loadedAddresses":{"readonly":[],"writable":[]},` +
+		`"loadedAccountsDataSize":4096}}`
+	server, closer := mockJSONRPC(t, stdjson.RawMessage(wrapIntoRPC(responseBody)))
+	defer closer()
+	client := New(server.URL)
+
+	payer := solana.MustPublicKeyFromBase58("11111111111111111111111111111111")
+	blockhash := solana.MustHashFromBase58("GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi")
+	tx, err := solana.NewTransaction(
+		[]solana.Instruction{
+			solana.NewInstruction(solana.SystemProgramID, solana.AccountMetaSlice{
+				{PublicKey: payer, IsSigner: true, IsWritable: true},
+			}, []byte{0, 0, 0, 0}),
+		},
+		blockhash,
+		solana.TransactionPayer(payer),
+	)
+	require.NoError(t, err)
+
+	out, err := client.SimulateTransactionWithOpts(context.Background(), tx, &SimulateTransactionOpts{
+		ReplaceRecentBlockhash: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.Value)
+
+	v := out.Value
+	assert.Nil(t, v.Err)
+	require.NotNil(t, v.UnitsConsumed)
+	assert.Equal(t, uint64(1234), *v.UnitsConsumed)
+	require.NotNil(t, v.Fee)
+	assert.Equal(t, uint64(5000), *v.Fee)
+	assert.Equal(t, []uint64{1000000, 0}, v.PreBalances)
+	assert.Equal(t, []uint64{994000, 1000}, v.PostBalances)
+
+	require.Len(t, v.PreTokenBalances, 1)
+	assert.Equal(t, uint16(1), v.PreTokenBalances[0].AccountIndex)
+	require.NotNil(t, v.PreTokenBalances[0].UiTokenAmount)
+	assert.Equal(t, "0", v.PreTokenBalances[0].UiTokenAmount.Amount)
+	assert.Nil(t, v.PreTokenBalances[0].UiTokenAmount.UiAmount)
+
+	require.Len(t, v.PostTokenBalances, 1)
+	assert.Equal(t, "600", v.PostTokenBalances[0].UiTokenAmount.Amount)
+	require.NotNil(t, v.PostTokenBalances[0].UiTokenAmount.UiAmount)
+	assert.InDelta(t, 0.0006, *v.PostTokenBalances[0].UiTokenAmount.UiAmount, 1e-9)
+
+	require.NotNil(t, v.ReplacementBlockhash)
+	assert.Equal(t, blockhash, v.ReplacementBlockhash.Blockhash)
+	assert.Equal(t, uint64(200), v.ReplacementBlockhash.LastValidBlockHeight)
+
+	require.NotNil(t, v.LoadedAccountsDataSize)
+	assert.Equal(t, uint64(4096), *v.LoadedAccountsDataSize)
 }
 
 func TestClient_GetFeeForMessage(t *testing.T) {
