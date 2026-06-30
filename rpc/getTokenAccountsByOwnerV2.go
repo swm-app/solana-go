@@ -46,6 +46,17 @@ type TokenAccountV2Options struct {
 	Limit         int    `json:"limit,omitempty"`         // 1-10000
 	PaginationKey string `json:"paginationKey,omitempty"` // cursor from previous response
 	Commitment    string `json:"commitment,omitempty"`    // "processed", "confirmed", or "finalized"
+
+	// ChangedSinceSlot is a Helius extension: when set, only accounts modified
+	// at or after this slot are returned. Used for incremental re-sync after a
+	// stream reconnect — the response's context.slot becomes the next high-water
+	// mark. Owner-scoped, so a closed account simply does not appear (there is no
+	// "closed" status for owner enumeration). 0 omits the field (full enumeration).
+	ChangedSinceSlot uint64 `json:"changedSinceSlot,omitempty"`
+
+	// MinContextSlot requires the node to evaluate the query at or after this
+	// slot, failing rather than serving a staler snapshot. 0 omits the field.
+	MinContextSlot uint64 `json:"minContextSlot,omitempty"`
 }
 
 // TokenAccountV2Response is the response from getTokenAccountsByOwnerV2.
