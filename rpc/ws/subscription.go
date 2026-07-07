@@ -32,6 +32,8 @@ type subscription struct {
 	stream            chan result
 	done              chan struct{}
 	once              sync.Once
+	ack               chan struct{}
+	ackOnce           sync.Once
 	err               error
 	closeFunc         func(err error)
 	unsubscribeMethod string
@@ -48,10 +50,19 @@ func newSubscription(
 		req:               req,
 		stream:            make(chan result, 256),
 		done:              make(chan struct{}),
+		ack:               make(chan struct{}),
 		closeFunc:         closeFunc,
 		unsubscribeMethod: unsubscribeMethod,
 		decoderFunc:       decoderFunc,
 	}
+}
+
+// confirm records the server's acknowledgement of the subscription request.
+// Idempotent: a duplicate acknowledgement for the same request is a no-op.
+func (s *subscription) confirm() {
+	s.ackOnce.Do(func() {
+		close(s.ack)
+	})
 }
 
 func (s *subscription) close(err error) {
@@ -92,4 +103,33 @@ func (s *Subscription[T]) Recv(ctx context.Context) (*T, error) {
 
 func (s *Subscription[T]) Unsubscribe() {
 	s.closeFunc()
+}
+
+// WaitConfirmed blocks until the server responds to the subscription request.
+// The subscribe call itself only writes the request to the socket; the server's
+// reply — a subscription id on acceptance, or an error object on rejection —
+// arrives asynchronously on the read loop. WaitConfirmed exposes that reply:
+// it returns nil once the server acknowledges the subscription, the server's
+// error if it rejects it (or the connection fails first), or ctx.Err() when
+// ctx is done. A subscription closed after being acknowledged still reports
+// nil — acceptance, once observed, is not retracted.
+func (s *Subscription[T]) WaitConfirmed(ctx context.Context) error {
+	select {
+	case <-s.sub.ack:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.sub.done:
+		// The acknowledgement and a later close may both have landed before this
+		// select ran; acceptance wins over the subsequent close.
+		select {
+		case <-s.sub.ack:
+			return nil
+		default:
+		}
+		if s.sub.err != nil {
+			return s.sub.err
+		}
+		return ErrSubscriptionClosed
+	}
 }

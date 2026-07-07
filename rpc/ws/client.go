@@ -240,6 +240,7 @@ func (c *Client) handleNewSubscriptionMessage(requestID, subID uint64) {
 	}
 	callBack.subID = subID
 	c.subscriptionByWSSubID[subID] = callBack
+	callBack.confirm()
 
 	zlog.Debug("registered ws subscription",
 		zap.Uint64("subscription_id", subID),
@@ -308,11 +309,16 @@ func (c *Client) closeSubscription(reqID uint64, err error) {
 
 	sub.close(err)
 
-	unsubErr := c.unsubscribe(sub.subID, sub.unsubscribeMethod)
-	if unsubErr != nil {
-		zlog.Warn("unable to send rpc unsubscribe call",
-			zap.Error(unsubErr),
-		)
+	// A subscription the server never acknowledged has no server-side id to
+	// unsubscribe from; writing an unsubscribe for id 0 would only ask the
+	// server to cancel a subscription that does not exist.
+	if sub.subID != 0 {
+		unsubErr := c.unsubscribe(sub.subID, sub.unsubscribeMethod)
+		if unsubErr != nil {
+			zlog.Warn("unable to send rpc unsubscribe call",
+				zap.Error(unsubErr),
+			)
+		}
 	}
 
 	delete(c.subscriptionByRequestID, sub.req.ID)
